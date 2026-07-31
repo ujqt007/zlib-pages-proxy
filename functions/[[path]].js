@@ -63,5 +63,3 @@ export async function onRequest(context) {
 
   return new Response('Not Found', { status: 404 });
 }
-
-}
