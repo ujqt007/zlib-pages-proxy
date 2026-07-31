@@ -2,6 +2,10 @@
 // 保存为仓库根目录下的：functions/[[path]].js  （双中括号，catch-all 路由）
 // 部署后用法（download.py 的 base_url）：
 //   https://<project>.pages.dev/proxy/zh.kid1412.by
+//
+// ⚠️ 关键修复：POST 请求必须把请求体【完整读出来】再转发，不能直接透传
+//    request.body 这个流——Cloudflare Pages/Worker 在转发流时会抛
+//    "Worker threw exception"（POST /login 必现）。GET 没有 body 所以不受影响。
 
 export async function onRequest(context) {
   const request = context.request;
@@ -23,23 +27,26 @@ export async function onRequest(context) {
     const targetPath = slash === -1 ? '' : rest.slice(slash + 1);
     const targetUrl = 'https://' + host + '/' + targetPath + url.search;
 
+    const method = request.method;
     const headers = new Headers();
     const pass = ['accept', 'accept-encoding', 'accept-language', 'authorization',
                   'content-type', 'user-agent', 'cache-control', 'pragma', 'cookie', 'x-requested-with'];
     for (const [k, v] of request.headers.entries()) {
       if (pass.includes(k.toLowerCase())) headers.set(k, v);
     }
-    headers.set('Host', host);
-    if (!headers.has('User-Agent')) {
-      headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    // ★ 关键修复：把请求体读全（流不能直接透传，否则 POST 抛异常）
+    let body = null;
+    if (method !== 'GET' && method !== 'HEAD') {
+      const ct = (request.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data') || ct.includes('json')) {
+        body = await request.text();
+      } else {
+        body = await request.arrayBuffer();
+      }
     }
 
-    const proxyReq = new Request(targetUrl, {
-      method: request.method,
-      headers,
-      body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
-      redirect: 'follow'
-    });
+    const proxyReq = new Request(targetUrl, { method, headers, body });
     const resp = await fetch(proxyReq);
 
     const out = new Headers();
@@ -55,4 +62,6 @@ export async function onRequest(context) {
   }
 
   return new Response('Not Found', { status: 404 });
+}
+
 }
